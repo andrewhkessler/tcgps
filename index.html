@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeslaConnect location</title>
+<style>body{margin:0;background:#0b0e12;color:#fff;font:22px sans-serif;text-align:center;padding-top:20%}</style>
+</head><body>
+<div id="msg">Getting car location…</div>
+<script>
+/* TeslaConnect location helper, served over HTTPS so the car browser will share GPS.
+ * Two ways to use it:
+ *  - embedded (hidden frame) in the adapter's home page: streams fixes to it with postMessage;
+ *  - opened as a page with ?back=1: takes one fix, then returns to the home page with it in the URL.
+ * Fixes are only ever sent to the adapter's own address, never to any other page. ES5 only. */
+(function () {
+  'use strict';
+  var HOME = 'http://100.127.4.1';
+  var geo = navigator.geolocation;
+  var embedded = window.parent && window.parent !== window;
+  var back = /[?&]back=1/.test(location.search);
+  function send(o) {
+    o.tcgps = 1;
+    if (embedded) { try { window.parent.postMessage(JSON.stringify(o), HOME); } catch (e) {} }
+  }
+  function fixOf(p) {
+    var c = p.coords;
+    return { lat: c.latitude, lon: c.longitude, acc: c.accuracy, spd: c.speed, hdg: c.heading, ts: p.timestamp || new Date().getTime() };
+  }
+  function errOf(e) { return { err: (e && e.code) || 0, msg: (e && e.message) || 'error' }; }
+  function goHome(hash) { location.replace(HOME + '/#' + hash); }
+
+  if (!geo) {
+    send({ err: -1, msg: 'no navigator.geolocation in helper' });
+    if (back) { goHome('gpsfail=' + encodeURIComponent('no geolocation API')); }
+    return;
+  }
+  if (back) {
+    geo.getCurrentPosition(function (p) {
+      var f = fixOf(p);
+      goHome('gpsfix=' + [f.lat.toFixed(6), f.lon.toFixed(6), Math.round(f.acc || 0), f.ts].join(','));
+    }, function (e) {
+      goHome('gpsfail=' + encodeURIComponent('code=' + (e && e.code) + ' ' + ((e && e.message) || '')));
+    }, { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 });
+    return;
+  }
+  if (!embedded) { document.getElementById('msg').innerHTML = 'TeslaConnect location helper. Nothing to do here.'; return; }
+  send({ hello: 1, ua: navigator.userAgent });
+  var last = 0;
+  function ok(p) { last = new Date().getTime(); send(fixOf(p)); }
+  function bad(e) { send(errOf(e)); }
+  try { geo.watchPosition(ok, bad, { enableHighAccuracy: true, maximumAge: 5000, timeout: 30000 }); } catch (e) { bad({ code: -2, message: String(e.message) }); }
+  /* some builds stop delivering a watch; poll as well when it goes quiet */
+  setInterval(function () {
+    if (new Date().getTime() - last > 4000) {
+      try { geo.getCurrentPosition(ok, bad, { enableHighAccuracy: false, maximumAge: 5000, timeout: 15000 }); } catch (e) {}
+    }
+  }, 3000);
+  window.addEventListener('message', function (ev) {
+    if (ev.origin !== HOME) { return; }
+    if (ev.data === 'tcgps-now') { try { geo.getCurrentPosition(ok, bad, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }); } catch (e) {} }
+  });
+})();
+</script>
+</body></html>
